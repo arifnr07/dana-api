@@ -145,34 +145,39 @@ export class DanaService {
       await this.authenticate();
 
       // Generate unique reference number if not provided
-      const referenceNo =
-        partnerReferenceNo || this.generatePartnerReferenceNo();
+      const referenceNo = partnerReferenceNo || crypto.randomUUID();
 
       const requestBody = {
-        merchantId: danaConfig.merchantId,
+        merchantId: "00007100010926",
         partnerReferenceNo: referenceNo,
-        amount: amount, // Make amount dynamic
-        feeAmount: this.calculateFeeAmount(amount), // Calculate fee dynamically
+        amount: {
+          value: '12345.00',
+          currency: 'IDR',
+        }, // Make amount dynamic
+        feeAmount: {
+          value: '123.00',
+          currency: 'IDR',
+        }, // Calculate fee dynamically
         additionalInfo: {
           terminalSource: 'MER',
           envInfo: {
             sessionId: this.generateSessionId(), // Generate unique session ID
             tokenId: this.generateTokenId(), // Generate unique token ID
             websiteLanguage: 'en_US',
-            // clientIp: '10.15.8.189' ?? this.getClientIp(), // Get actual client IP
-            clientIp: '10.15.8.189', // Get actual client IP
-            osType: 'Windows.PC',
+            clientIp: this.getClientIp(), // Get actual client IP
+            // clientIp: '10.15.8.189', // Get actual client IP
+            osType: 'Windows',
             appVersion: '1.0',
             sdkVersion: '1.0',
             sourcePlatform: 'IPG',
             terminalType: 'SYSTEM',
-            orderTerminalType: 'APP',
+            orderTerminalType: 'SYSTEM',
             orderOsType: 'Windows',
             merchantAppVersion: '1.0',
-            extendInfo: JSON.stringify({
-              deviceId: this.generateDeviceId(), // Generate unique device ID
-              bizScenario: 'SAMPLE_MERCHANT_AGENT',
-            }),
+            // extendInfo: JSON.stringify({
+            //   deviceId: this.generateDeviceId(), // Generate unique device ID
+            //   bizScenario: 'MERCHANT_AGENT',
+            // }),
           },
         },
       };
@@ -190,9 +195,16 @@ export class DanaService {
         danaConfig.privateKey,
       );
 
-      const headers = this.generateHeaders(signature);
-      headers['X-PARTNER-ID'] = danaConfig.clientId;
-      headers['X-DEVICE-ID'] = this.generateDeviceId(); // Use consistent device ID
+      // const headers = this.generateHeaderCustomers(signature);
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-TIMESTAMP': this.signatureService.getTimestamp(),
+        'X-SIGNATURE': signature,
+        'X-PARTNER-ID': danaConfig.clientId,
+        'X-EXTERNAL-ID': referenceNo,
+        'CHANNEL-ID': '95221',
+        // Authorization: `Bearer ${this.accessToken}`,
+      };
 
       console.log('QRIS Header:', headers);
       const response = await firstValueFrom(
