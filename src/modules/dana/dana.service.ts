@@ -2,9 +2,11 @@ import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import * as crypto from 'crypto';
-import { AccessTokenDto, danaConfig } from './dana.module';
+import { danaConfig } from './dana.config';
 import {
   AuthResponseDto,
+  QrisPaymentDto,
+  AccessTokenDto,
   BalanceResponseDto,
   TransactionListResponseDto,
   GetTransactionsDto,
@@ -12,7 +14,8 @@ import {
   PaymentResponseDto,
   RefundPaymentDto,
   RefundResponseDto,
-} from './dana.module';
+} from './dana.dto';
+import { DanaSignatureService } from './dana.signature';
 
 @Injectable()
 export class DanaService {
@@ -20,116 +23,39 @@ export class DanaService {
   private accessToken: string | null = null;
   private tokenExpiry: Date | null = null;
 
-  constructor(private readonly httpService: HttpService) { }
-
-  /**
-   * Generate RSA signature for request authentication
-   */
-  private generateSignature(data: string, privateKey: string): string {
-    try {
-      const sign = crypto.createSign('RSA-SHA256');
-      sign.update(data);
-      sign.end();
-
-      const formattedPrivateKey = this.base64KeyToPEM(privateKey, 'PRIVATE');
-      const signature = sign.sign(formattedPrivateKey, 'base64');
-
-      return signature;
-    } catch (error) {
-      this.logger.error('Error generating signature:', error);
-      throw new HttpException(
-        'Failed to generate signature',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
+  private signatureService = new DanaSignatureService();
+  constructor(private readonly httpService: HttpService) {}
 
   /**
    * Format private key for crypto operations
    */
-  private base64KeyToPEM(base64Key, keyType) {
-    return [`-----BEGIN ${keyType} KEY-----`, ...this.splitStringIntoChunks(base64Key, 64), `-----END ${keyType} KEY-----`].join("\n");
-  }
-  private splitStringIntoChunks(input, chunkSize) {
-    const chunkCount = Math.ceil(input.length / chunkSize)
-    return Array.from({ length: chunkCount }).map((v, chunkIndex) => input.substr(chunkIndex * chunkSize, chunkSize));
-  }
-
-  private formatPrivateKey(privateKey: string): string {
-    if (privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
-      return privateKey;
-    }
-
-    return `-----BEGIN PRIVATE KEY-----:${privateKey.match(/.{1,64}/g)?.join(':')}:-----END PRIVATE KEY-----`;
-  }
-
-  /**
-   * Verify signature from Dana response
-   */
-  private verifySignature(
-    data: string,
-    signature: string,
-    publicKey: string,
-  ): boolean {
-    try {
-      const verify = crypto.createVerify('RSA-SHA256');
-      verify.update(data);
-      verify.end();
-
-      const formattedPublicKey = this.formatPublicKey(publicKey);
-      return verify.verify(formattedPublicKey, signature, 'base64');
-    } catch (error) {
-      this.logger.error('Error verifying signature:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Format public key for crypto operations
-   */
-  private formatPublicKey(publicKey: string): string {
-    if (publicKey.includes('-----BEGIN PUBLIC KEY-----')) {
-      return publicKey;
-    }
-
-    return `-----BEGIN PUBLIC KEY-----:${publicKey.match(/.{1,64}/g)?.join(':')}:-----END PUBLIC KEY-----`;
-  }
-
-  /**
-   * Generate common headers for API requests
-   */
-  private hash(string) {
-    return crypto.createHash('sha256').update(string).digest('hex');
-  }
-  private getLocalISO() {
-    const date = new Date();
-    const pad = (n) => n.toString().padStart(2, '0');
-
-    const year = date.getFullYear();
-    const month = pad(date.getMonth() + 1);
-    const day = pad(date.getDate());
-    const hours = pad(date.getHours());
-    const minutes = pad(date.getMinutes());
-    const seconds = pad(date.getSeconds());
-
-    const offset = -date.getTimezoneOffset(); // in minutes
-    const sign = offset >= 0 ? '+' : '-';
-    const offsetHours = pad(Math.floor(Math.abs(offset) / 60));
-    const offsetMinutes = pad(Math.abs(offset) % 60);
-
-    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetMinutes}`;
-  }
-
 
   private generateHeaders(signature?: string): Record<string, string> {
-
     const headers = {
       'Content-Type': 'application/json',
       'X-CLIENT-KEY': danaConfig.clientId,
-      'X-TIMESTAMP': this.getLocalISO(),
+      'X-TIMESTAMP': this.signatureService.getTimestamp(),
+      'X-EXTERNAL-ID': crypto.randomUUID(),
       'CHANNEL-ID': '95221',
-      'Dana-Request-Id': crypto.randomUUID(),
+    };
 
+    if (signature) {
+      headers['X-SIGNATURE'] = signature;
+    }
+
+    if (this.accessToken) {
+      headers['Authorization'] = `Bearer ${this.accessToken}`;
+    }
+
+    return headers;
+  }
+  private generateHeaderCustomers(signature?: string): Record<string, string> {
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-PARTNER-ID': danaConfig.clientId,
+      'X-EXTERNAL-ID': crypto.randomUUID(),
+      'X-TIMESTAMP': this.signatureService.getTimestamp(),
+      'CHANNEL-ID': '95221',
     };
 
     if (signature) {
@@ -142,7 +68,6 @@ export class DanaService {
 
     return headers;
   }
-
   /**
    * Check if access token is valid and not expired
    */
@@ -158,6 +83,7 @@ export class DanaService {
   async authenticate(): Promise<AuthResponseDto> {
     try {
       if (this.isTokenValid()) {
+        console.log('VALID TOKEN');
         return {
           access_token: this.accessToken,
           token_type: 'Bearer',
@@ -166,63 +92,219 @@ export class DanaService {
           ),
         };
       }
-      const requestBody = {
-        "grantType": "client_credentials",
-        "additionalInfo": {}
-      };
+      const apiPath = '/v1.0/access-token/b2b.htm';
+      const timestamp = this.signatureService.getTimestamp();
+      const signatureData = `${danaConfig.clientId}|${timestamp}`;
 
-      const signatureData = `${danaConfig.clientId}|${this.getLocalISO()}`;
-
-      const signature = this.generateSignature(
+      const signature = this.signatureService.generateSignature(
         signatureData,
         danaConfig.privateKey,
       );
+      const requestBody = {
+        grantType: 'client_credentials',
+        additionalInfo: {},
+      };
 
       const headers = this.generateHeaders(signature);
 
-  
       const response = await firstValueFrom(
-        this.httpService.post(
-          `${danaConfig.baseUrl}/v1.0/access-token/b2b.htm`,
-          requestBody,
-          {
-            headers,
-          },
-        ),
+        this.httpService.post(`${danaConfig.baseUrl}${apiPath}`, requestBody, {
+          headers,
+        }),
       );
 
-      const authData = response.data;
-      this.accessToken = authData.access_token;
-      this.tokenExpiry = new Date(Date.now() + authData.expires_in * 1000);
+      const authData = await response?.data;
 
-      this.logger.log('Successfully authenticated with Dana API');
+      if (authData?.accessToken && authData?.expiresIn) {
+        this.accessToken = authData.accessToken;
+        this.tokenExpiry = new Date(Date.now() + authData.expiresIn * 1000);
+      } else {
+        console.error('Invalid auth response structure');
+      }
+
+      this.logger.log('Successfully authenticated with Dana API', authData);
       return authData;
     } catch (error) {
+      console.error('AUTH ERR:', error);
       this.logger.error(
-        'Authentication failed:',
-        error.response?.data || error.message,
+        `Authentication failed:`,
+        error.response?.data || error.message || error,
       );
       throw new HttpException(
-        'Authentication failed',
+        `Authentication failed ${error.response?.data?.responseMessage || 'Authentication failed'} ${error.response?.data?.responseCode || '500'}`,
         error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
+
+  async getQrisPayment(
+    amount: string,
+    partnerReferenceNo?: string,
+  ): Promise<QrisPaymentDto> {
+    try {
+      await this.authenticate();
+
+      // Generate unique reference number if not provided
+      const referenceNo =
+        partnerReferenceNo || this.generatePartnerReferenceNo();
+
+      const requestBody = {
+        merchantId: danaConfig.merchantId,
+        partnerReferenceNo: referenceNo,
+        amount: amount, // Make amount dynamic
+        feeAmount: this.calculateFeeAmount(amount), // Calculate fee dynamically
+        additionalInfo: {
+          terminalSource: 'MER',
+          envInfo: {
+            sessionId: this.generateSessionId(), // Generate unique session ID
+            tokenId: this.generateTokenId(), // Generate unique token ID
+            websiteLanguage: 'en_US',
+            // clientIp: '10.15.8.189' ?? this.getClientIp(), // Get actual client IP
+            clientIp: '10.15.8.189', // Get actual client IP
+            osType: 'Windows.PC',
+            appVersion: '1.0',
+            sdkVersion: '1.0',
+            sourcePlatform: 'IPG',
+            terminalType: 'SYSTEM',
+            orderTerminalType: 'APP',
+            orderOsType: 'Windows',
+            merchantAppVersion: '1.0',
+            extendInfo: JSON.stringify({
+              deviceId: this.generateDeviceId(), // Generate unique device ID
+              bizScenario: 'SAMPLE_MERCHANT_AGENT',
+            }),
+          },
+        },
+      };
+
+      console.log('QRIS Request Body:', JSON.stringify(requestBody, null, 2));
+      const apiPath = '/v1.0/qr/qr-mpm-generate.htm';
+      const signatureData = this.signatureService.prepareSignatureData(
+        'POST',
+        apiPath,
+        JSON.stringify(requestBody),
+      );
+
+      const signature = this.signatureService.generateSignature(
+        signatureData,
+        danaConfig.privateKey,
+      );
+
+      const headers = this.generateHeaders(signature);
+      headers['X-PARTNER-ID'] = danaConfig.clientId;
+      headers['X-DEVICE-ID'] = this.generateDeviceId(); // Use consistent device ID
+
+      console.log('QRIS Header:', headers);
+      const response = await firstValueFrom(
+        this.httpService.post(`${danaConfig.baseUrl}${apiPath}`, requestBody, {
+          headers,
+          timeout: 30000, // Add timeout
+        }),
+      );
+
+      console.log('QRIS Response:', response.data);
+
+      // Validate response
+      if (!response.data || response.data.responseCode !== '2000000') {
+        console.error(`DANA API Error:`, response.data.responseCode);
+        throw new Error(
+          `DANA API Error: ${response.data?.responseMessage || 'Unknown error'}`,
+        );
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error(
+        'Failed to get Qris:',
+        JSON.stringify(error.response?.data || error.message),
+      );
+      throw new HttpException(
+        'Failed to get Qris',
+        error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // Helper methods to add to your service class
+  private generatePartnerReferenceNo(): string {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 8);
+    return `${timestamp}${random}`.substring(0, 22); // DANA requires max 22 chars
+  }
+
+  private calculateFeeAmount(amount: string): string {
+    // Implement your fee calculation logic
+    // This is just an example - adjust based on your business rules
+    const amountNum = parseFloat(amount);
+    const feePercent = 0.007; // 0.7% fee example
+    return Math.ceil(amountNum * feePercent).toString();
+  }
+
+  private generateSessionId(): string {
+    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  }
+
+  private generateTokenId(): string {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(
+      /[xy]/g,
+      function (c) {
+        const r = (Math.random() * 16) | 0;
+        const v = c == 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      },
+    );
+  }
+
+  private getClientIp(): string {
+    // In a real application, get this from the request
+    // For now, return a placeholder
+    return '127.0.0.1';
+  }
+
+  private generateDeviceId(): string {
+    return 'android-' + Math.random().toString(16).substring(2, 18);
+  }
+
+  // Updated method signature for better usability
+  async createQrisPayment(
+    amount: number,
+    currency: string = 'IDR',
+    description?: string,
+    expiryMinutes: number = 30,
+  ): Promise<QrisPaymentDto> {
+    // Validate amount
+    if (amount <= 0) {
+      throw new HttpException(
+        'Amount must be greater than 0',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // Convert amount to string format expected by DANA
+    const amountStr = Math.round(amount * 100).toString(); // Convert to cents/smallest unit
+
+    return this.getQrisPayment(amountStr);
+  }
+
   async getAccessToken(): Promise<AccessTokenDto> {
     try {
       await this.authenticate();
       const requestBody = {
-
-        "grantType": "AUTHORIZATION_CODE",
+        grantType: 'AUTHORIZATION_CODE',
         // "authCode": "ABC3821738137123",
-        "refreshToken": "",
-        "additionalInfo": {}
+        refreshToken: '',
+        additionalInfo: {},
       };
-      console.log(requestBody)
-      // const timestamp = this.getLocalISO();
-      const signatureData = `${danaConfig.clientId}|${this.getLocalISO()}`;
+      console.log(requestBody);
 
-      const signature = this.generateSignature(
+      const apiPath = '/v1.0/access-token/b2b2c.htm';
+      const signatureData = this.signatureService.prepareSignatureData(
+        'POST',
+        apiPath,
+        JSON.stringify(requestBody),
+      );
+
+      const signature = this.signatureService.generateSignature(
         signatureData,
         danaConfig.privateKey,
       );
@@ -230,8 +312,7 @@ export class DanaService {
       const headers = this.generateHeaders(signature);
 
       const response = await firstValueFrom(
-        this.httpService.post(`${danaConfig.baseUrl}/v1.0/access-token/b2b2c.htm`,
-          requestBody, {
+        this.httpService.post(`${danaConfig.baseUrl}${apiPath}`, requestBody, {
           headers,
         }),
       );
@@ -249,40 +330,40 @@ export class DanaService {
     }
   }
 
-  /**
-   * Get merchant balance
-   */
   async getBalance(): Promise<BalanceResponseDto> {
     try {
       await this.authenticate();
+
       const requestBody = {
-        "balanceTypes": ["BALANCE"],
-        "additionalInfo": {}
+        balanceTypes: ['BALANCE'],
+        additionalInfo: {},
       };
-      console.log(requestBody)
-      const timestamp = this.getLocalISO();
-      const signatureData = `POST:/v1.0/balance-inquiry.htm:${this.hash(JSON.stringify(requestBody))}:${timestamp}:`;
-      const signature = this.generateSignature(
+      console.log(requestBody);
+      const apiPath = '/v1.0/balance-inquiry.htm';
+      const signatureData = this.signatureService.prepareSignatureData(
+        'POST',
+        apiPath,
+        JSON.stringify(requestBody),
+      );
+
+      const signature = this.signatureService.generateSignature(
         signatureData,
         danaConfig.privateKey,
       );
 
-      const headers = this.generateHeaders(signature);
-      headers['X-PARTNER-ID'] = danaConfig.clientId;
-      headers['X-EXTERNAL-ID'] = danaConfig.merchantId;
+      const headers = this.generateHeaderCustomers(signature);
       headers['X-DEVICE-ID'] = 'android-20013adf6cdd8123f';
       console.log(headers);
       const response = await firstValueFrom(
-        this.httpService.post(`${danaConfig.baseUrl}/v1.0/balance-inquiry.htm`,
-          requestBody, {
+        this.httpService.post(`${danaConfig.baseUrl}${apiPath}`, requestBody, {
           headers,
         }),
       );
 
       return response.data;
     } catch (error) {
-      this.logger.error(
-        'Failed to get balance:',
+      console.error(
+        `Failed to get balance: `,
         error.response?.data || error.message,
       );
       throw new HttpException(
@@ -292,9 +373,6 @@ export class DanaService {
     }
   }
 
-  /**
-   * Get transaction history
-   */
   async getTransactions(
     params: GetTransactionsDto,
   ): Promise<TransactionListResponseDto> {
@@ -312,7 +390,7 @@ export class DanaService {
       const timestamp = Date.now().toString();
       const endpoint = `/api/v1/merchant/transactions?${queryParams.toString()}`;
       const signatureData = `GET:${endpoint}:${timestamp}:${danaConfig.clientId}`;
-      const signature = this.generateSignature(
+      const signature = this.signatureService.generateSignature(
         signatureData,
         danaConfig.privateKey,
       );
@@ -338,9 +416,6 @@ export class DanaService {
     }
   }
 
-  /**
-   * Request payment from customer
-   */
   async requestPayment(
     paymentRequest: RequestPaymentDto,
   ): Promise<PaymentResponseDto> {
@@ -365,7 +440,7 @@ export class DanaService {
 
       const timestamp = Date.now().toString();
       const signatureData = `POST:/api/v1/payment/request:${timestamp}:${JSON.stringify(requestBody)}`;
-      const signature = this.generateSignature(
+      const signature = this.signatureService.generateSignature(
         signatureData,
         danaConfig.privateKey,
       );
@@ -395,9 +470,6 @@ export class DanaService {
     }
   }
 
-  /**
-   * Refund payment
-   */
   async refundPayment(
     refundRequest: RefundPaymentDto,
   ): Promise<RefundResponseDto> {
@@ -414,7 +486,7 @@ export class DanaService {
 
       const timestamp = Date.now().toString();
       const signatureData = `POST:/api/v1/payment/refund:${timestamp}:${JSON.stringify(requestBody)}`;
-      const signature = this.generateSignature(
+      const signature = this.signatureService.generateSignature(
         signatureData,
         danaConfig.privateKey,
       );
@@ -444,9 +516,6 @@ export class DanaService {
     }
   }
 
-  /**
-   * Get payment status
-   */
   async getPaymentStatus(merchantTradeNo: string): Promise<PaymentResponseDto> {
     try {
       await this.authenticate();
@@ -454,7 +523,7 @@ export class DanaService {
       const timestamp = Date.now().toString();
       const endpoint = `/api/v1/payment/status/${merchantTradeNo}`;
       const signatureData = `GET:${endpoint}:${timestamp}:${danaConfig.clientId}`;
-      const signature = this.generateSignature(
+      const signature = this.signatureService.generateSignature(
         signatureData,
         danaConfig.privateKey,
       );
@@ -480,10 +549,11 @@ export class DanaService {
     }
   }
 
-  /**
-   * Verify webhook signature
-   */
   verifyWebhookSignature(payload: string, signature: string): boolean {
-    return this.verifySignature(payload, signature, danaConfig.publicKey);
+    return this.signatureService.verifySignature(
+      payload,
+      signature,
+      danaConfig.publicKey,
+    );
   }
 }

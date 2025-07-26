@@ -16,6 +16,7 @@ import { DanaService } from './dana.service';
 import {
   AuthResponseDto,
   AccessTokenDto,
+  QrisPaymentDto,
   BalanceResponseDto,
   TransactionListResponseDto,
   GetTransactionsDto,
@@ -23,13 +24,13 @@ import {
   PaymentResponseDto,
   RefundPaymentDto,
   RefundResponseDto,
-} from './dana.module';
+} from './dana.dto';
 
 @Controller('dana')
 export class DanaController {
   private readonly logger = new Logger(DanaController.name);
 
-  constructor(private readonly danaService: DanaService) { }
+  constructor(private readonly danaService: DanaService) {}
 
   /**
    * Authenticate and get access token
@@ -38,9 +39,9 @@ export class DanaController {
   async authenticate(): Promise<AuthResponseDto> {
     return await this.danaService.authenticate();
   }
-  @Post('token')
-  async getAccessToken(): Promise<AccessTokenDto> {
-    return await this.danaService.getAccessToken();
+  @Post('qris-payment')
+  async generateQris(): Promise<QrisPaymentDto> {
+    return await this.danaService.createQrisPayment(1000);
   }
   /**
    * Get merchant balance
