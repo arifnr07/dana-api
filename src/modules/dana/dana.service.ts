@@ -148,7 +148,7 @@ export class DanaService {
       const referenceNo = partnerReferenceNo || crypto.randomUUID();
 
       const requestBody = {
-        merchantId: "00007100010926",
+        merchantId: '00007100010926',
         partnerReferenceNo: referenceNo,
         amount: {
           value: '12345.00',
@@ -158,6 +158,7 @@ export class DanaService {
           value: '123.00',
           currency: 'IDR',
         }, // Calculate fee dynamically
+        // validityPeriod: '2025-07-27T23:38:11+07:00',
         additionalInfo: {
           terminalSource: 'MER',
           envInfo: {
@@ -174,10 +175,10 @@ export class DanaService {
             orderTerminalType: 'SYSTEM',
             orderOsType: 'Windows',
             merchantAppVersion: '1.0',
-            // extendInfo: JSON.stringify({
-            //   deviceId: this.generateDeviceId(), // Generate unique device ID
-            //   bizScenario: 'MERCHANT_AGENT',
-            // }),
+            extendInfo: JSON.stringify({
+              deviceId: this.generateDeviceId(), // Generate unique device ID
+              bizScenario: 'SAMPLE_MERCHANT_AGENT',
+            }),
           },
         },
       };
@@ -203,7 +204,7 @@ export class DanaService {
         'X-PARTNER-ID': danaConfig.clientId,
         'X-EXTERNAL-ID': referenceNo,
         'CHANNEL-ID': '95221',
-        // Authorization: `Bearer ${this.accessToken}`,
+        origin: `localhost.dev`,
       };
 
       console.log('QRIS Header:', headers);
