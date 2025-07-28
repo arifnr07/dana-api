@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Put,
   Body,
   Query,
   Param,
@@ -15,7 +14,6 @@ import {
 import { DanaService } from './dana.service';
 import {
   AuthResponseDto,
-  AccessTokenDto,
   QrisPaymentDto,
   BalanceResponseDto,
   TransactionListResponseDto,
@@ -29,7 +27,6 @@ import {
 @Controller('dana')
 export class DanaController {
   private readonly logger = new Logger(DanaController.name);
-
   constructor(private readonly danaService: DanaService) {}
 
   /**

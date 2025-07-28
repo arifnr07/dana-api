@@ -139,24 +139,25 @@ export class DanaService {
 
   async getQrisPayment(
     amount: string,
-    partnerReferenceNo?: string,
+    currency: string,
+    description?: string,
   ): Promise<QrisPaymentDto> {
     try {
       await this.authenticate();
 
       // Generate unique reference number if not provided
-      const referenceNo = partnerReferenceNo || crypto.randomUUID();
+      const referenceNo = crypto.randomUUID();
 
       const requestBody = {
         merchantId: '00007100010926',
         partnerReferenceNo: referenceNo,
         amount: {
           value: '12345.00',
-          currency: 'IDR',
+          currency: currency,
         }, // Make amount dynamic
         feeAmount: {
           value: '123.00',
-          currency: 'IDR',
+          currency: currency,
         }, // Calculate fee dynamically
         // validityPeriod: '2025-07-27T23:38:11+07:00',
         additionalInfo: {
@@ -178,6 +179,7 @@ export class DanaService {
             extendInfo: JSON.stringify({
               deviceId: this.generateDeviceId(), // Generate unique device ID
               bizScenario: 'SAMPLE_MERCHANT_AGENT',
+              description: description || 'Payment for order',
             }),
           },
         },
@@ -283,7 +285,6 @@ export class DanaService {
     amount: number,
     currency: string = 'IDR',
     description?: string,
-    expiryMinutes: number = 30,
   ): Promise<QrisPaymentDto> {
     // Validate amount
     if (amount <= 0) {
@@ -296,7 +297,7 @@ export class DanaService {
     // Convert amount to string format expected by DANA
     const amountStr = Math.round(amount * 100).toString(); // Convert to cents/smallest unit
 
-    return this.getQrisPayment(amountStr);
+    return this.getQrisPayment(amountStr, currency, description);
   }
 
   async getAccessToken(): Promise<AccessTokenDto> {

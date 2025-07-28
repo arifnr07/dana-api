@@ -40,6 +40,7 @@ export class DanaSignatureService {
       return JSON.stringify(JSON.parse(jsonString));
     } catch (error) {
       // If not valid JSON, return as is
+      console.error('Error minifying JSON:', error);
       return jsonString;
     }
   }
