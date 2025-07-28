@@ -39,6 +39,7 @@ export class DanaController {
     const privateKey = data.privateKey;
     return await this.signatureService.generateSignature(signature, privateKey);
   }
+
   /**
    * Authenticate and get access token
    */
@@ -49,10 +50,6 @@ export class DanaController {
   @Post('qris-payment')
   async generateQris(): Promise<QrisPaymentDto> {
     return await this.danaService.createQrisPayment(1000);
-  }
-  @Post('token')
-  async getAccessToken(): Promise<QrisPaymentDto> {
-    return await this.danaService.getAccessToken();
   }
   /**
    * Get merchant balance

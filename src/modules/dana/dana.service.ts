@@ -24,7 +24,7 @@ export class DanaService {
   private tokenExpiry: Date | null = null;
 
   private signatureService = new DanaSignatureService();
-  constructor(private readonly httpService: HttpService) {}
+  constructor(private readonly httpService: HttpService) { }
 
   /**
    * Format private key for crypto operations
@@ -137,6 +137,57 @@ export class DanaService {
     }
   }
 
+  /**
+   * Get access token using authorization code
+   */
+
+  async getAccessToken(): Promise<AccessTokenDto> {
+    try {
+      await this.authenticate();
+      const requestBody = {
+        grantType: 'AUTHORIZATION_CODE',
+        authCode: 'ABC3821738137123',
+        // refreshToken: '',
+        additionalInfo: {},
+      };
+      console.log(requestBody);
+
+      const apiPath = '/v1.0/access-token/b2b2c.htm';
+
+      const timestamp = this.signatureService.getTimestamp();
+      const signatureData = `${danaConfig.clientId}|${timestamp}`;
+
+      const signature = this.signatureService.generateSignature(
+        signatureData,
+        danaConfig.privateKey,
+      );
+
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-TIMESTAMP': this.signatureService.getTimestamp(),
+        'X-CLIENT-KEY': danaConfig.clientId,
+        'X-SIGNATURE': signature,
+      };
+
+      const response = await firstValueFrom(
+        this.httpService.post(`${danaConfig.baseUrl}${apiPath}`, requestBody, {
+          headers,
+        }),
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error('AUTH ERR:', error);
+      this.logger.error(
+        `Authentication failed:`,
+        error.response?.data || error.message || error,
+      );
+      throw new HttpException(
+        `Authentication failed ${error.response?.data?.responseMessage || 'Authentication failed'} ${error.response?.data?.responseCode || '500'}`,
+        error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
   async getQrisPayment(
     amount: string,
     currency: string,
@@ -149,43 +200,45 @@ export class DanaService {
       const referenceNo = crypto.randomUUID();
 
       const requestBody = {
-        merchantId: '00007100010926',
+        merchantId: danaConfig.merchantId,
         partnerReferenceNo: referenceNo,
         amount: {
           value: '12345.00',
           currency: currency,
         }, // Make amount dynamic
-        feeAmount: {
-          value: '123.00',
-          currency: currency,
-        }, // Calculate fee dynamically
+        // feeAmount: {
+        //   value: '123.00',
+        //   currency: currency,
+        // }, // Calculate fee dynamically
         // validityPeriod: '2025-07-27T23:38:11+07:00',
         additionalInfo: {
+          accessToken: this.accessToken,
           terminalSource: 'MER',
           envInfo: {
-            sessionId: this.generateSessionId(), // Generate unique session ID
-            tokenId: this.generateTokenId(), // Generate unique token ID
-            websiteLanguage: 'en_US',
-            clientIp: this.getClientIp(), // Get actual client IP
+            // sessionId: this.generateSessionId(), // Generate unique session ID
+            // tokenId: this.generateTokenId(), // Generate unique token ID
+            // websiteLanguage: 'en_US',
+            // clientIp: this.getClientIp(), // Get actual client IP
             // clientIp: '10.15.8.189', // Get actual client IP
-            osType: 'Windows',
-            appVersion: '1.0',
-            sdkVersion: '1.0',
+            // osType: 'Windows',
+            // appVersion: '1.0',
+            // sdkVersion: '1.0',
             sourcePlatform: 'IPG',
             terminalType: 'SYSTEM',
             orderTerminalType: 'SYSTEM',
-            orderOsType: 'Windows',
-            merchantAppVersion: '1.0',
-            extendInfo: JSON.stringify({
+            // orderOsType: 'Windows',
+            // merchantAppVersion: '1.0',
+            /*extendInfo: JSON.stringify({
               deviceId: this.generateDeviceId(), // Generate unique device ID
               bizScenario: 'SAMPLE_MERCHANT_AGENT',
               description: description || 'Payment for order',
-            }),
+            }),*/
           },
         },
       };
 
       console.log('QRIS Request Body:', JSON.stringify(requestBody, null, 2));
+      // const apiPath = '/v1.0/qr/qr-mpm-generate.htm';
       const apiPath = '/v1.0/qr/qr-mpm-generate.htm';
       const signatureData = this.signatureService.prepareSignatureData(
         'POST',
@@ -207,6 +260,7 @@ export class DanaService {
         'X-EXTERNAL-ID': referenceNo,
         'CHANNEL-ID': '95221',
         origin: `localhost.dev`,
+        Authorization: `Bearer ${this.accessToken}`,
       };
 
       console.log('QRIS Header:', headers);
@@ -299,36 +353,54 @@ export class DanaService {
 
     return this.getQrisPayment(amountStr, currency, description);
   }
+  private getDanaOAuthUrl(params) {
+    const baseUrl = '/v1.0/get-auth-code';
+    const query = new URLSearchParams({
+      partnerId: params.partnerId,
+      timestamp: params.timestamp, // Format: YYYY-MM-DDTHH:mm:ss+07:00
+      externalId: params.externalId,
+      channelId: params.channelId,
+      merchantId: params.merchantId || '',
+      subMerchantId: params.subMerchantId || '',
+      seamlessData: encodeURIComponent(JSON.stringify(params.seamlessData || {})),
+      seamlessSign: encodeURIComponent(params.seamlessSign || ''),
+      scopes: params.scopes.join(','),
+      redirectUrl: params.redirectUrl,
+      state: params.state,
+      lang: params.lang || 'id',
+      allowRegistration: params.allowRegistration || 'true'
+    });
 
-  async getAccessToken(): Promise<AccessTokenDto> {
+    return `${baseUrl}?${query.toString()}`;
+  }
+
+  async getAuthCode(): Promise<AccessTokenDto> {
     try {
       await this.authenticate();
-      const requestBody = {
-        grantType: 'AUTHORIZATION_CODE',
-        // "authCode": "ABC3821738137123",
-        refreshToken: '',
-        additionalInfo: {},
-      };
-      console.log(requestBody);
+      const oauthUrl = this.getDanaOAuthUrl({
+        partnerId: '21667842748173213',
+        timestamp: '2025-07-28T16:05:00+07:00',
+        externalId: '637126721366372',
+        channelId: 'DANAID',
+        merchantId: 'MERCHANT123',
+        scopes: ['QUERY_BALANCE', 'PUBLIC_ID'],
+        redirectUrl: 'https://yourdomain.com/authSuccess',
+        state: 'randomCSRFToken123',
+        seamlessData: {
+          mobileNumber: '62822999999',
+          bizScenario: 'PAYMENT',
+          verifiedTime: '2025-07-28T16:00:00+07:00',
+          externalUid: 'user123',
+          deviceId: 'device456',
+          skipRegisterConsult: true,
+        },
+        seamlessSign: 'yourSignedSeamlessDataBase64Encoded',
+      });
 
-      const apiPath = '/v1.0/access-token/b2b2c.htm';
-      const signatureData = this.signatureService.prepareSignatureData(
-        'POST',
-        apiPath,
-        JSON.stringify(requestBody),
-      );
-
-      const signature = this.signatureService.generateSignature(
-        signatureData,
-        danaConfig.privateKey,
-      );
-
-      const headers = this.generateHeaders(signature);
+      const apiPath = oauthUrl;
 
       const response = await firstValueFrom(
-        this.httpService.post(`${danaConfig.baseUrl}${apiPath}`, requestBody, {
-          headers,
-        }),
+        this.httpService.get(`${danaConfig.baseUrl}${apiPath}`, {}),
       );
 
       return response.data;
@@ -343,6 +415,7 @@ export class DanaService {
       );
     }
   }
+
 
   async getBalance(): Promise<BalanceResponseDto> {
     try {
