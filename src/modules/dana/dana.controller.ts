@@ -1,10 +1,7 @@
 import {
   Controller,
-  Get,
   Post,
   Body,
-  Query,
-  Param,
   Headers,
   RawBody,
   HttpException,
@@ -13,22 +10,12 @@ import {
 } from '@nestjs/common';
 import { DanaSignatureService } from './dana.signature';
 import { DanaService } from './dana.service';
-import {
-  AuthResponseDto,
-  QrisPaymentDto,
-  BalanceResponseDto,
-  TransactionListResponseDto,
-  GetTransactionsDto,
-  RequestPaymentDto,
-  PaymentResponseDto,
-  RefundPaymentDto,
-  RefundResponseDto,
-} from './dana.dto';
+import { AuthResponseDto, QrisPaymentDto } from './dana.dto';
 
 @Controller('dana')
 export class DanaController {
   private readonly logger = new Logger(DanaController.name);
-  constructor(private readonly danaService: DanaService) { }
+  private readonly danaService = new DanaService();
   private signatureService = new DanaSignatureService();
   @Post('sign')
   async signSignature(
@@ -46,62 +33,14 @@ export class DanaController {
   async authenticate(): Promise<AuthResponseDto> {
     return await this.danaService.authenticate();
   }
+
   @Post('qris-payment')
-  async generateQris(): Promise<QrisPaymentDto> {
-    return await this.danaService.createQrisPayment(1000);
+  async generateQris(
+    @Body() payload: any,
+    @Headers() header: any,
+  ): Promise<QrisPaymentDto> {
+    return await this.danaService.getQrisPayment(header, payload);
   }
-  @Post('token')
-  async getAccessToken(): Promise<QrisPaymentDto> {
-    return await this.danaService.getAccessToken();
-  }
-  /**
-   * Get merchant balance
-   */
-  @Get('balance')
-  async getBalance(): Promise<BalanceResponseDto> {
-    return await this.danaService.getBalance();
-  }
-
-  /**
-   * Get transaction history
-   */
-  @Get('transactions')
-  async getTransactions(
-    @Query() params: GetTransactionsDto,
-  ): Promise<TransactionListResponseDto> {
-    return await this.danaService.getTransactions(params);
-  }
-
-  /**
-   * Request payment
-   */
-  @Post('payment/request')
-  async requestPayment(
-    @Body() paymentRequest: RequestPaymentDto,
-  ): Promise<PaymentResponseDto> {
-    return await this.danaService.requestPayment(paymentRequest);
-  }
-
-  /**
-   * Refund payment
-   */
-  @Post('payment/refund')
-  async refundPayment(
-    @Body() refundRequest: RefundPaymentDto,
-  ): Promise<RefundResponseDto> {
-    return await this.danaService.refundPayment(refundRequest);
-  }
-
-  /**
-   * Get payment status
-   */
-  @Get('payment/status/:merchantTradeNo')
-  async getPaymentStatus(
-    @Param('merchantTradeNo') merchantTradeNo: string,
-  ): Promise<PaymentResponseDto> {
-    return await this.danaService.getPaymentStatus(merchantTradeNo);
-  }
-
   /**
    * Handle webhook notifications from Dana
    */
