@@ -33,7 +33,10 @@ export class DanaController {
   async authenticate(): Promise<AuthResponseDto> {
     return await this.danaService.authenticate();
   }
-
+  @Post('token')
+  async applyToken(): Promise<AuthResponseDto> {
+    return await this.danaService.applyToken();
+  }
   @Post('qris-payment')
   async generateQris(
     @Body() payload: any,
@@ -48,6 +51,14 @@ export class DanaController {
     @Headers() header: any,
   ): Promise<QrisPaymentDto> {
     return await this.danaService.createOrder(header, payload);
+  }
+
+  @Post('consult-pay')
+  async consultPay(
+    @Body() payload: any,
+    @Headers() header: any,
+  ): Promise<QrisPaymentDto> {
+    return await this.danaService.consultPay(header, payload);
   }
   /**
    * Handle webhook notifications from Dana
