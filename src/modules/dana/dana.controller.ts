@@ -41,6 +41,14 @@ export class DanaController {
   ): Promise<QrisPaymentDto> {
     return await this.danaService.getQrisPayment(header, payload);
   }
+
+  @Post('create-order')
+  async createOrder(
+    @Body() payload: any,
+    @Headers() header: any,
+  ): Promise<QrisPaymentDto> {
+    return await this.danaService.createOrder(header, payload);
+  }
   /**
    * Handle webhook notifications from Dana
    */

@@ -48,13 +48,13 @@ export class DanaSignatureService {
     httpMethod: string,
     relativePath: string,
     httpBody: string,
+    timestamp: string,
   ): string {
     try {
       const minifiedBody = this.minifyJSON(httpBody);
 
       // Step 2: Hash the minified body
       const bodyHash = this.hash(minifiedBody);
-      const timestamp = this.getTimestamp();
       const stringToSign = `${httpMethod}:${relativePath}:${bodyHash.toLowerCase()}:${timestamp}`;
       return stringToSign;
     } catch (error) {
